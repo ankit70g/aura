@@ -1,5 +1,5 @@
 import { Sandbox } from "@e2b/code-interpreter";
-import { gemini, createAgent, createTool, createNetwork,type Tool,type Message, createState } from "@inngest/agent-kit";
+import { gemini, createAgent, createTool, createNetwork, type Tool, type Message, createState } from "@inngest/agent-kit";
 import { inngest } from "./client";
 import { getSandbox, lastAssistantTextMessageContent, parseAgentOutput } from "./utils";
 import { z } from "zod";
@@ -22,10 +22,10 @@ export const codeAgentFunction = inngest.createFunction(
       const sandbox = await Sandbox.create("aura-nextjs-test-2");
       await sandbox.setTimeout(SANDBOX_TIMEOUT);
       return sandbox.sandboxId;
-    });  
+    });
 
     const previousMessages = await step.run("get-previous-messages", async () => {
-      const formattedMessages: Message[] =[];
+      const formattedMessages: Message[] = [];
 
       const messages = await prisma.message.findMany({
         where: {
@@ -56,11 +56,11 @@ export const codeAgentFunction = inngest.createFunction(
       },
     );
 
-     const codeAgent = createAgent<AgentState>({
+    const codeAgent = createAgent<AgentState>({
       name: "code-agent",
       description: "An expert coding agent",
       system: PROMPT,
-      model: gemini({ 
+      model: gemini({
         model: "gemini-2.5-pro",
       }),
       tools: [
@@ -80,12 +80,12 @@ export const codeAgentFunction = inngest.createFunction(
                   onStdout: (data: string) => {
                     buffers.stdout += data;
                   },
-                  onStderr: (data: string)=> {
+                  onStderr: (data: string) => {
                     buffers.stderr += data;
                   }
                 });
                 return result.stdout;
-              } catch (e){
+              } catch (e) {
                 console.error(
                   `Command failed: ${e} \nstdout: ${buffers.stdout}\nstderr: ${buffers.stderr}`,
                 );
@@ -100,13 +100,13 @@ export const codeAgentFunction = inngest.createFunction(
           parameters: z.object({
             files: z.array(
               z.object({
-                path:z.string(),
+                path: z.string(),
                 content: z.string(),
               }),
             ),
           }),
           handler: async (
-            { files }, 
+            { files },
             { step, network }: Tool.Options<AgentState>
           ) => {
             const newFiles = await step?.run("createOrUpdateFiles", async () => {
@@ -119,12 +119,12 @@ export const codeAgentFunction = inngest.createFunction(
                 }
 
                 return updatedFiles;
-              } catch (e){
+              } catch (e) {
                 return "Error: " + e;
               }
             });
 
-            if(typeof newFiles === "object"){
+            if (typeof newFiles === "object") {
               network.state.data.files = newFiles;
             }
           }
@@ -142,7 +142,7 @@ export const codeAgentFunction = inngest.createFunction(
                 const contents: { path: string; content: string; }[] = [];
                 for (const file of files) {
                   const content = await sandbox.files.read(file);
-                  contents.push({ path: file, content});
+                  contents.push({ path: file, content });
                 }
                 return JSON.stringify(contents);
               } catch (e) {
@@ -154,10 +154,10 @@ export const codeAgentFunction = inngest.createFunction(
       ],
       lifecycle: {
         onResponse: async ({ result, network }) => {
-          const lastAssistantMessageText = 
-          lastAssistantTextMessageContent(result);
+          const lastAssistantMessageText =
+            lastAssistantTextMessageContent(result);
 
-          if (lastAssistantMessageText && network ) {
+          if (lastAssistantMessageText && network) {
             if (lastAssistantMessageText.includes("<task_summary")) {
               network.state.data.summary = lastAssistantMessageText;
             }
@@ -182,78 +182,78 @@ export const codeAgentFunction = inngest.createFunction(
       },
     });
 
-    const result  = await network.run(event.data.value, { state });
+    const result = await network.run(event.data.value, { state });
 
-    const fragmentTitleGenerator = createAgent ({
+    const fragmentTitleGenerator = createAgent({
       name: "fragment-title-generator",
       description: "A fragment title generator",
       system: FRAGMENT_TITLE_PROMPT,
-      model: gemini({ 
+      model: gemini({
         model: "gemini-2.5-pro",
       }),
     })
 
-    const responseGenerator = createAgent ({
+    const responseGenerator = createAgent({
       name: "response-generator",
       description: "A response generator",
       system: RESPONSE_PROMPT,
-      model: gemini({ 
+      model: gemini({
         model: "gemini-2.5-pro",
       }),
     });
 
-    const { 
-      output: fragmentTitleOutput 
+    const {
+      output: fragmentTitleOutput
     } = await fragmentTitleGenerator.run(result.state.data.summary);
-    const { 
-      output: responseOutput 
+    const {
+      output: responseOutput
     } = await responseGenerator.run(result.state.data.summary);
 
 
-    const isError = 
+    const isError =
       !result.state.data.summary ||
       Object.keys(result.state.data.files || {}).length === 0;
 
 
-  const sandboxUrl = await step.run("get-sandbox-url", async () => {
-    const sandbox = await getSandbox(sandboxId);
-    const host = sandbox.getHost(3000);
-    return `http://${host}`;
-  });
+    const sandboxUrl = await step.run("get-sandbox-url", async () => {
+      const sandbox = await getSandbox(sandboxId);
+      const host = sandbox.getHost(3000);
+      return `http://${host}`;
+    });
 
-  await step.run("save-result", async () => {
-    if (isError) {
+    await step.run("save-result", async () => {
+      if (isError) {
+        return await prisma.message.create({
+          data: {
+            projectId: event.data.projectId,
+            content: "Something went wrong. Please try again",
+            role: "ASSISTANT",
+            type: "ERROR",
+          },
+        });
+      }
       return await prisma.message.create({
         data: {
           projectId: event.data.projectId,
-          content: "Something went wrong. Please try again",
+          content: parseAgentOutput(responseOutput),
           role: "ASSISTANT",
-          type: "ERROR",
-        },
-      });
-    }
-    return await prisma.message.create({
-      data: {
-        projectId: event.data.projectId,
-        content: parseAgentOutput(responseOutput),
-        role: "ASSISTANT",
-        type: "RESULT",   
-        fragment: {
-          create: {
-            sandboxUrl: sandboxUrl,
-            title: parseAgentOutput(fragmentTitleOutput),
-            files: result.state.data.files,
+          type: "RESULT",
+          fragment: {
+            create: {
+              sandboxUrl: sandboxUrl,
+              title: parseAgentOutput(fragmentTitleOutput),
+              files: result.state.data.files,
+            },
           },
         },
-      },
-    })
-  });
+      })
+    });
 
-  return { 
-    url: sandboxUrl,
-    title: "Fragment",
-    files: result.state.data.files,
-    summary: result.state.data.summary,
-  };
+    return {
+      url: sandboxUrl,
+      title: "Fragment",
+      files: result.state.data.files,
+      summary: result.state.data.summary,
+    };
   },
 );
